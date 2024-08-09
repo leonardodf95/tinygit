@@ -26,6 +26,10 @@ const (
 var acceptedExtensions = []string{".exe", ".map", ".fr3", ".dll", ".xsd", ".wav", ".jpg"}
 
 func InitControlVersion(path string) error {
+	if VerifyIfExistVersionControl(path) {
+		fmt.Println("Controle de versão já inicializado.")
+		return nil
+	}
 	err := generateVersionDir(path)
 	if err != nil {
 		fmt.Println("Erro ao criar diretório de versão:", err)
