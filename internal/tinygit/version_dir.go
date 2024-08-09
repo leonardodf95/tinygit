@@ -1,7 +1,6 @@
-//go:build !windows
-// +build !windows
+//go:build linux || darwin
 
-package main
+package tinygit
 
 import (
 	"fmt"

@@ -1,4 +1,4 @@
-package main
+package tinygit
 
 import (
 	"crypto/sha1"

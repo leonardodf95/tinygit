@@ -1,4 +1,4 @@
-package main
+package tinygit
 
 import (
 	"bytes"
@@ -13,7 +13,6 @@ import (
 
 func generateVersionFile(rootPath string, tree Node) error {
 	dirVerision := filepath.Join(rootPath, versionDirName)
-
 	if _, err := os.Stat(dirVerision); os.IsNotExist(err) {
 		err := generateVersionDir(rootPath)
 		if err != nil {

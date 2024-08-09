@@ -1,7 +1,6 @@
 //go:build windows
-// +build windows
 
-package main
+package tinygit
 
 import (
 	"fmt"

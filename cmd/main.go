@@ -4,39 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
-)
+	"path/filepath"
 
-var acceptedExtensions = []string{".exe", ".map", ".fr3", ".dll", ".xsd", ".wav", ".jpg"}
-
-// Estrutura para representar um nó na árvore
-type Node struct {
-	Path     string  `json:"path"`
-	Hash     string  `json:"hash"`
-	Type     string  `json:"type"` // "blob" para arquivos, "tree" para diretórios
-	Children []*Node `json:"children,omitempty"`
-}
-
-type Changes struct {
-	Added    []*Node `json:"added"`
-	Removed  []*Node `json:"removed"`
-	Modified []*Node `json:"modified"`
-}
-
-const (
-	versionFileName = "version"
-	versionDirName  = ".tinygit"
-	blobType        = "blob"
-	treeType        = "tree"
+	"github.com/leonardodf95/tinygit/internal/tinygit"
 )
 
 func main() {
 
 	// Definindo as flags
 	directoryFlag := flag.String("d", "", "Diretório de trabalho")
-	directoryLongFlag := flag.String("directory", "", "Diretório de trabalho")
-
-	fmt.Println("diretoryFlag:", *directoryFlag)
-	fmt.Println("directoryLongFlag:", *directoryLongFlag)
 
 	// Fazendo o parse das flags
 	flag.Parse()
@@ -51,16 +27,16 @@ func main() {
 	// Determina o diretório usando a flag ou o argumento padrão
 	var path string
 	if *directoryFlag != "" {
-		path = *directoryFlag
-	} else if *directoryLongFlag != "" {
-		path = *directoryLongFlag
+		path = filepath.Clean(*directoryFlag)
 	} else {
-		path = "."
+
+		pathAbs, err := filepath.Abs(".")
+		if err != nil {
+			fmt.Println("Erro ao determinar o diretório de trabalho:", err)
+			return
+		}
+		path = pathAbs
 	}
-
-	fmt.Println("Comando:", command)
-
-	fmt.Println("Diretório de trabalho:", path)
 
 	switch command {
 	case "help":
@@ -73,17 +49,17 @@ func main() {
 		fmt.Println("		Uso: commit -d / --directory <diretório>")
 		fmt.Println("	help - Mostra esta mensagem de ajuda")
 	case "init":
-		err := InitControlVersion(path)
+		err := tinygit.InitControlVersion(path)
 		if err != nil {
 			fmt.Println("Erro ao inicializar controle de versão:", err)
 		}
 	case "status":
-		_, err := StatusControlVersion(path)
+		_, err := tinygit.StatusControlVersion(path)
 		if err != nil {
 			fmt.Println("Erro ao verificar status:", err)
 		}
 	case "commit":
-		err := CommitControlVersion(path)
+		err := tinygit.CommitControlVersion(path)
 		if err != nil {
 			fmt.Println("Erro ao realizar commit:", err)
 		}
