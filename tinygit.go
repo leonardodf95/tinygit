@@ -1,6 +1,9 @@
 package tinygit
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 // Structure to represent the versioning file
 type Versioning struct {
@@ -42,7 +45,7 @@ func InitControlVersion(path string, ext []string) error {
 		return err
 	}
 	fmt.Println("Controle de versão inicializado em", path)
-	tree, err := buildTree(path, &ext)
+	tree, err := buildTree(path, path, &ext)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return err
@@ -67,7 +70,7 @@ func InitControlVersion(path string, ext []string) error {
 }
 
 func CommitControlVersion(path string) error {
-	c, err := StatusControlVersion(path)
+	c, v, err := StatusControlVersion(path)
 	if err != nil {
 		fmt.Println("Erro ao verificar o status:", err)
 		return err
@@ -75,13 +78,10 @@ func CommitControlVersion(path string) error {
 	if c == nil {
 		return nil
 	}
-	v, err := decompressVersionFile(path)
-	if err != nil {
-		fmt.Println("Erro ao ler a árvore salva:", err)
-		return err
-	}
+
 	v.Tree = *c.Modified[0]
 
+	fmt.Println("Salvando árvore de versionamento...")
 	err = generateVersionFile(path, v)
 	if err != nil {
 		fmt.Println("Erro ao salvar a árvore:", err)
@@ -91,30 +91,30 @@ func CommitControlVersion(path string) error {
 	return nil
 }
 
-func StatusControlVersion(path string) (*Changes, error) {
+func StatusControlVersion(path string) (*Changes, *Versioning, error) {
 	fmt.Println("Verificando status de controle de versão em", path)
 	if !VerifyIfExistVersionControl(path) {
 		fmt.Println("Controle de versão não inicializado.")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	v, err := decompressVersionFile(path)
 	if err != nil {
 		fmt.Println("Erro ao ler a árvore salva:", err)
-		return nil, err
+		return nil, nil, err
 	}
 
-	currentTree, err := buildTree(path, &v.ExtensionsToGenerateVersion)
+	currentTree, err := buildTree(path, path, &v.ExtensionsToGenerateVersion)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	changes := CompareTrees(&v.Tree, currentTree)
 
 	if len(changes.Modified) == 0 && len(changes.Added) == 0 && len(changes.Removed) == 0 {
 		fmt.Println("Nenhuma mudança detectada.")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if len(changes.Modified) > 0 {
@@ -164,7 +164,7 @@ func StatusControlVersion(path string) (*Changes, error) {
 		}
 	}
 
-	return changes, nil
+	return changes, v, nil
 }
 
 func PrintVersionFile(path string) error {
@@ -173,14 +173,22 @@ func PrintVersionFile(path string) error {
 		fmt.Println("Erro ao ler a árvore salva:", err)
 		return err
 	}
+	fileTree, err := os.OpenFile("tree.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 
+	if err != nil {
+		fmt.Println("Erro ao abrir o arquivo:", err)
+		return err
+	}
+	fileTree.WriteString("HEAD: " + v.Head + "\n")
+	fileTree.WriteString("Árvore:\n")
+	fileTree.Close()
 	fmt.Println("HEAD:", v.Head)
 	fmt.Println("Árvore:")
-	printTree(&v.Tree, 0)
+	printTree(&v.Tree)
 	return nil
 }
 
-func CloneRepository(path string, server string) error {
+func CloneRepository(path string, server string, params map[string]string) error {
 	if VerifyIfExistVersionControl(path) {
 		fmt.Println("Controle de versão já inicializado.")
 		return nil
@@ -192,7 +200,8 @@ func CloneRepository(path string, server string) error {
 	}
 	fmt.Println("Controle de versão inicializado em", path)
 	fmt.Println("Clonando repositório...")
-	v, err := RequestClone(server, path)
+
+	v, err := RequestClone(path, server, params)
 
 	if err != nil {
 		fmt.Println("Erro ao clonar o repositório:", err)
@@ -204,7 +213,7 @@ func CloneRepository(path string, server string) error {
 	}
 
 	fmt.Println("Repositório clonado, gerando árvore de versionamento...")
-	tree, err := buildTree(path, &v.ExtensionsToGenerateVersion)
+	tree, err := buildTree(path, path, &v.ExtensionsToGenerateVersion)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return err
@@ -226,7 +235,7 @@ func CloneRepository(path string, server string) error {
 	return nil
 }
 
-func PullRepository(path string, server string) error {
+func PullRepository(path string, server string, parameter map[string]string) error {
 
 	if !VerifyIfExistVersionControl(path) {
 		return fmt.Errorf("controle de versão não inicializado")
@@ -240,7 +249,8 @@ func PullRepository(path string, server string) error {
 		return fmt.Errorf("erro ao ler a árvore salva: %w", err)
 	}
 
-	hasModifications := sendHeadOfVersion(vCurrent.Head, server)
+	fmt.Println("Enviando HEAD para o servidor... " + vCurrent.Head)
+	hasModifications := sendHeadOfVersion(vCurrent.Head, server, parameter)
 
 	if !hasModifications {
 		fmt.Println("Repositório já está atualizado.")
@@ -248,14 +258,14 @@ func PullRepository(path string, server string) error {
 	}
 
 	fmt.Println("Repositório atualizado, gerando árvore de versionamento...")
-	err = sendTreeOfVersionForUpdate(&vCurrent.Tree, server)
+	err = sendTreeOfVersionForUpdate(path, &vCurrent.Tree, server, parameter)
 	if err != nil {
 		fmt.Println("Erro ao enviar a árvore:", err)
 		return fmt.Errorf("erro ao enviar a árvore: %w", err)
 	}
 
 	fmt.Println("Árvore de versionamento atualizada, gerando árvore local...")
-	tree, err := buildTree(path, &vCurrent.ExtensionsToGenerateVersion)
+	tree, err := buildTree(path, path, &vCurrent.ExtensionsToGenerateVersion)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return fmt.Errorf("erro ao construir a árvore: %w", err)
@@ -277,7 +287,7 @@ func PullRepository(path string, server string) error {
 	return nil
 }
 
-func PushRepository(path string, server string) error {
+func PushRepository(path string, server string, parameters map[string]string) error {
 	if !VerifyIfExistVersionControl(path) {
 		return fmt.Errorf("controle de versão não inicializado")
 	}
@@ -290,14 +300,14 @@ func PushRepository(path string, server string) error {
 		return fmt.Errorf("erro ao ler a árvore salva: %w", err)
 	}
 
-	hasModifications := sendHeadOfVersion(vCurrent.Head, server)
+	hasModifications := sendHeadOfVersion(vCurrent.Head, server, parameters)
 	if !hasModifications {
 		fmt.Println("Repositório já está atualizado.")
 		return nil
 	}
 
 	fmt.Println("Repositório atualizado, enviando árvore de versionamento...")
-	c, err := sendTreeOfVersion(&vCurrent.Tree, server)
+	c, err := sendTreeOfVersion(&vCurrent.Tree, server, parameters)
 
 	if err != nil {
 		fmt.Println("Erro ao enviar a árvore:", err)
@@ -316,7 +326,7 @@ func PushRepository(path string, server string) error {
 		return fmt.Errorf("erro ao compactar os arquivos: %w", err)
 	}
 
-	err = sendFilesToServer(buf, server)
+	err = sendFilesToServer(buf, server, parameters)
 
 	if err != nil {
 		fmt.Println("Erro ao enviar os arquivos:", err)
@@ -325,4 +335,13 @@ func PushRepository(path string, server string) error {
 
 	fmt.Println("Arquivos enviados com sucesso.")
 	return nil
+}
+
+func GetTreeControlVersion(path string) (*Node, error) {
+	v, err := decompressVersionFile(path)
+	if err != nil {
+		fmt.Println("Erro ao ler a árvore salva:", err)
+		return nil, err
+	}
+	return &v.Tree, nil
 }

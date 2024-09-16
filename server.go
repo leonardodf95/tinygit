@@ -4,8 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,20 +13,29 @@ import (
 	"time"
 )
 
-func CompareHeadsHandler(w http.ResponseWriter, r *http.Request, head string) {
+func CompareHeadsHandler(w http.ResponseWriter, r *http.Request, path string) {
 	rHead := r.URL.Query().Get("head")
 
+	fmt.Println("RHEAD:", rHead)
 	if rHead == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	hasChanges := CompareHashes(head, rHead)
+	tree, err := GetTreeControlVersion(path)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
-	if hasChanges {
-		w.WriteHeader(http.StatusOK)
-	} else {
+	fmt.Println("HEAD:", tree.Hash)
+
+	hasNoChanges := CompareHashes(tree.Hash, rHead)
+
+	if hasNoChanges {
 		w.WriteHeader(http.StatusNotModified)
+	} else {
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -60,11 +69,17 @@ func CompareTreesHandler(w http.ResponseWriter, r *http.Request, n Node) {
 	w.Header().Set("Content-Type", "application/json")
 }
 
-func PullHandler(w http.ResponseWriter, r *http.Request, n Node) {
+func PullHandler(w http.ResponseWriter, r *http.Request, rootPath string, n Node) {
+
+	fmt.Println("n.Path:", n.Path)
+	fmt.Println("n.Hash:", n.Hash)
+	fmt.Println("n.Type:", n.Type)
+
 	ctx := r.Context()
 	//Ler Arvore do corpo da requisição
 	rawTree, err := io.ReadAll(r.Body)
 	if err != nil {
+		fmt.Println("ERRO AO LER O CORPO DA REQUISIÇÃO:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -72,52 +87,47 @@ func PullHandler(w http.ResponseWriter, r *http.Request, n Node) {
 	var tree Node
 	err = json.Unmarshal(rawTree, &tree)
 	if err != nil {
+		fmt.Println("ERRO AO DECODIFICAR JSON:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	//Comparar arvores
-	c := CompareTrees(&n, &tree)
-
-	var buffer bytes.Buffer
-	writer := multipart.NewWriter(&buffer)
-
-	jsonWriter, err := writer.CreateFormField("changes")
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+	c := CompareTrees(&tree, &n)
+	for _, node := range c.Removed {
+		fmt.Println("REMOVED NODE PATH:", node.Path)
 	}
-	jsonBytes, err := json.Marshal(c)
-
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+	for _, node := range c.Modified {
+		fmt.Println("MODIFIED NODE PATH:", node.Path)
+	}
+	for _, node := range c.Added {
+		fmt.Println("ADDED NODE PATH:", node.Path)
 	}
 
-	_, err = jsonWriter.Write(jsonBytes)
-
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+	pr, pw := io.Pipe()
+	zipWriter := zip.NewWriter(pw)
+	removed := []string{}
+	for _, node := range c.Removed {
+		fmt.Println("REMOVED NODE PATH:", node.Path)
+		removed = append(removed, node.Path)
 	}
 
 	select {
 	case <-ctx.Done():
+		// Operação foi cancelada
+		fmt.Println("REQUISIÇÃO CANCELADA")
+		http.Error(w, "Request canceled", http.StatusRequestTimeout)
 		return
 	default:
-		pr, pw := io.Pipe()
-		zipWriter := zip.NewWriter(pw)
 
 		go func() {
 			defer pw.Close()
 			defer zipWriter.Close()
 
-			err = filepath.Walk(n.Path, func(path string, info os.FileInfo, err error) error {
+			fmt.Println("n PATH:", n.Path)
+			fmt.Println("ROOT PATH:", rootPath)
+
+			err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
 				}
@@ -126,13 +136,15 @@ func PullHandler(w http.ResponseWriter, r *http.Request, n Node) {
 					return nil
 				}
 
+				relPath := strings.TrimPrefix(path, rootPath)
+				relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+
 				for _, node := range c.Modified {
-					if node.Path != path {
+					if node.Path != relPath {
 						continue
 					}
-					relPath := strings.TrimPrefix(path, n.Path)
-					relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
 
+					fmt.Println("ARQUIVO MODIFICADO:", relPath)
 					err = addFileToZip(zipWriter, path, relPath, info)
 					if err != nil {
 						return err
@@ -140,12 +152,18 @@ func PullHandler(w http.ResponseWriter, r *http.Request, n Node) {
 				}
 
 				for _, node := range c.Added {
-					if node.Path != path {
+					logFile, err := os.OpenFile(filepath.Join(rootPath, "log.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					if err != nil {
+						return err
+					}
+					defer logFile.Close()
+					logFile.WriteString(fmt.Sprintf("path: %s", path))
+					logFile.WriteString(fmt.Sprintf("node path: %s\n", node.Path))
+					if node.Path != relPath {
 						continue
 					}
-					relPath := strings.TrimPrefix(path, n.Path)
-					relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
 
+					fmt.Println("ARQUIVO ADICIONADO", relPath)
 					err = addFileToZip(zipWriter, path, relPath, info)
 					if err != nil {
 						return err
@@ -154,15 +172,18 @@ func PullHandler(w http.ResponseWriter, r *http.Request, n Node) {
 
 				return nil
 			})
+			if err != nil {
+				fmt.Println("ERRO AO PERCORRER DIRETÓRIO:", err)
+			}
 
 		}()
 
-		w.Header().Set("Content-Type", writer.FormDataContentType())
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=pull.zip")
+		w.Header().Set("Removed", strings.Join(removed, ","))
 		w.WriteHeader(http.StatusOK)
 		io.Copy(w, pr)
-
 	}
-
 }
 
 // PushFilesHandler Recebe arquivos e atualiza a arvore

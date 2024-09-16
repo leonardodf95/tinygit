@@ -6,24 +6,31 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 // Constrói recursivamente a árvore
-func buildTree(path string, ext *[]string) (*Node, error) {
+func buildTree(rootPath, path string, ext *[]string) (*Node, error) {
+	// Calcula o caminho relativo em relação ao diretório base
+	relativePath, err := filepath.Rel(rootPath, path)
+	if err != nil {
+		return nil, err
+	}
+
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 
 	node := &Node{
-		Path: path,
+		Path: relativePath,
 	}
 
 	if fileInfo.IsDir() {
 		node.Type = treeType
-		children, err := readDir(path, ext)
+		children, err := readDir(rootPath, path, ext)
 		if err != nil {
 			return nil, err
 		}
@@ -141,12 +148,17 @@ func CompareHashes(hash1, hash2 string) bool {
 	return strings.EqualFold(hash1, hash2)
 }
 
-func printTree(node *Node, level int) {
-	for i := 0; i < level; i++ {
-		fmt.Print("  ")
+func printTree(node *Node) {
+
+	printFile, err := os.OpenFile("tree.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Erro ao abrir o arquivo:", err)
+		return
 	}
+	defer printFile.Close()
+	printFile.WriteString(fmt.Sprintf("%s (%s) - %s\n", node.Path, node.Type, node.Hash))
 	fmt.Printf("%s (%s) - %s\n", node.Path, node.Type, node.Hash)
 	for _, child := range node.Children {
-		printTree(child, level+1)
+		printTree(child)
 	}
 }

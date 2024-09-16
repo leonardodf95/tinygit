@@ -8,19 +8,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/google/uuid"
 )
 
-func RequestClone(url string, path string) (*Versioning, error) {
+func RequestClone(path string, serverUrl string, parameters map[string]string) (*Versioning, error) {
 	// Verificar se o diretório já existe
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, errors.New("diretório não existe")
 	}
 
-	resp, err := http.Get(url)
+	u, err := parseUrlParameter(serverUrl, "clone", parameters)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.Get(u)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +39,8 @@ func RequestClone(url string, path string) (*Versioning, error) {
 		return nil, errors.New("erro ao baixar o repositório")
 	}
 
-	tempFile, err := os.CreateTemp("", "tinygit")
+	id := uuid.New().String()
+	tempFile, err := os.CreateTemp("", id+".zip")
 	if err != nil {
 		return nil, err
 	}
@@ -68,78 +76,19 @@ func RequestClone(url string, path string) (*Versioning, error) {
 	return &v, nil
 }
 
-func unzipFiles(zipPath string, destPath string) error {
-	r, err := zip.OpenReader(zipPath)
-
+func sendHeadOfVersion(head string, serverUrl string, parameters map[string]string) bool {
+	parameters["head"] = head
+	u, err := parseUrlParameter(serverUrl, "head", parameters)
 	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	for _, f := range r.File {
-		fpath := filepath.Join(destPath, f.Name)
-
-		if !strings.HasPrefix(fpath, filepath.Clean(destPath)+string(os.PathSeparator)) {
-			return fmt.Errorf("%s: invalid file path", fpath)
-		}
-
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, os.ModePerm)
-			continue
-		}
-
-		if err = os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
-			return err
-		}
-
-		destFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			return err
-		}
-
-		fileInArchive, err := f.Open()
-		if err != nil {
-			return err
-		}
-
-		_, err = io.Copy(destFile, fileInArchive)
-
-		if err != nil {
-			return err
-		}
-
-		err = destFile.Close()
-
-		if err != nil {
-			return err
-		}
-
-		err = fileInArchive.Close()
-
-		if err != nil {
-			return err
-		}
-
-		err = os.Chtimes(fpath, f.Modified, f.Modified)
-		if err != nil {
-			return err
-		}
-
+		fmt.Println("Erro ao criar URL:", err)
+		return false
 	}
 
-	return nil
-}
-
-func sendHeadOfVersion(head string, url string) bool {
-	req, err := http.NewRequest(http.MethodGet, url+"/head", nil)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		fmt.Println("Erro ao criar requisição:", err)
 		return false
 	}
-
-	q := req.URL.Query()
-	q.Add("head", head)
-	req.URL.RawQuery = q.Encode()
 
 	client := http.Client{}
 	resp, err := client.Do(req)
@@ -160,33 +109,44 @@ func sendHeadOfVersion(head string, url string) bool {
 	return true
 }
 
-func sendTreeOfVersionForUpdate(tree *Node, url string) error {
-	req, err := http.NewRequest(http.MethodPost, url+"/pull", nil)
+func sendTreeOfVersionForUpdate(rootPath string, tree *Node, serverUrl string, parameters map[string]string) error {
+	u, err := parseUrlParameter(serverUrl, "pull", parameters)
 	if err != nil {
+		fmt.Println("aqui 3", err)
 		return err
 	}
+
+	fmt.Println("Enviando árvore para o servidor...")
 
 	b, err := json.Marshal(tree)
 	if err != nil {
 		return err
 	}
 
-	req.Body = io.NopCloser(strings.NewReader(string(b)))
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(b))
+	if err != nil {
+		fmt.Println("aqui 1", err)
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	client := http.Client{}
+
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Println("aqui 2", err)
 		return err
 	}
 
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("erro ao enviar árvore")
+		return errors.New("erro ao enviar árvore, status: " + resp.Status)
 	}
-
-	// GERANDO ARQUIVOS TEMPORÁRIOS
-	timeStamp := time.Now().Format("20060102150405")
-	tempFile, err := os.CreateTemp("", "tinygit"+timeStamp)
-
+	fmt.Println("Árvore enviada com sucesso! Processando resposta...")
+	//CRIAR ARQUIVO TEMPORÁRIO
+	id := uuid.New().String()
+	tempFile, err := os.CreateTemp("", id+".zip")
 	if err != nil {
 		return err
 	}
@@ -194,6 +154,7 @@ func sendTreeOfVersionForUpdate(tree *Node, url string) error {
 	defer os.Remove(tempFile.Name())
 
 	_, err = io.Copy(tempFile, resp.Body)
+
 	if err != nil {
 		return err
 	}
@@ -204,23 +165,37 @@ func sendTreeOfVersionForUpdate(tree *Node, url string) error {
 		return err
 	}
 
-	err = unzipFiles(tempFile.Name(), tree.Path)
+	err = unzipFiles(tempFile.Name(), filepath.Join(rootPath))
 	if err != nil {
 		return err
 	}
 
-	for _, removed := range resp.Header["Removed"] {
-		err = os.RemoveAll(filepath.Join(tree.Path, removed))
-		if err != nil {
-			return err
+	removedRaw := resp.Header.Get("Removed")
+	var removed []string
+	if removedRaw != "" {
+		removed = strings.Split(removedRaw, ",")
+	}
+
+	if len(removed) > 0 {
+		fmt.Println("Removendo:")
+		for _, r := range removed {
+			fmt.Println(r)
+			err := os.RemoveAll(filepath.Join(rootPath, r))
+			if err != nil {
+				fmt.Println("Erro ao remover o arquivo:", err)
+			}
 		}
 	}
 
 	return nil
 }
 
-func sendTreeOfVersion(tree *Node, url string) (*Changes, error) {
-	req, err := http.NewRequest(http.MethodPost, url+"/tree", nil)
+func sendTreeOfVersion(tree *Node, serverUrl string, paramenters map[string]string) (*Changes, error) {
+	u, err := parseUrlParameter(serverUrl, "tree", paramenters)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, u, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +282,14 @@ func sendTreeOfVersion(tree *Node, url string) (*Changes, error) {
 }
 
 // sendFilesToServer envia o arquivo compactado para o servidor
-func sendFilesToServer(b []bytes.Buffer, url string) error {
-	req, err := http.NewRequest(http.MethodPost, url+"/push", &b[0])
+func sendFilesToServer(b []bytes.Buffer, serverUrl string, parameters map[string]string) error {
+	u, err := parseUrlParameter(serverUrl, "push", parameters)
+
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, u, &b[0])
 	if err != nil {
 		return err
 	}
@@ -324,5 +305,81 @@ func sendFilesToServer(b []bytes.Buffer, url string) error {
 	}
 
 	return nil
+}
 
+func parseUrlParameter(serverUrl, path string, parameters map[string]string) (string, error) {
+	u, err := url.Parse(serverUrl)
+	if err != nil {
+		return "", err
+	}
+	u.Path = filepath.Join(u.Path, path)
+	q := u.Query()
+	for k, v := range parameters {
+		q.Add(k, v)
+	}
+	u.RawQuery = q.Encode()
+
+	return u.String(), nil
+}
+
+func unzipFiles(zipPath string, destPath string) error {
+	r, err := zip.OpenReader(zipPath)
+
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		fpath := filepath.Join(destPath, f.Name)
+
+		if !strings.HasPrefix(fpath, filepath.Clean(destPath)+string(os.PathSeparator)) {
+			return fmt.Errorf("%s: invalid file path", fpath)
+		}
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(fpath, os.ModePerm)
+			continue
+		}
+
+		if err = os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
+			return err
+		}
+
+		destFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		fileInArchive, err := f.Open()
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(destFile, fileInArchive)
+
+		if err != nil {
+			return err
+		}
+
+		err = destFile.Close()
+
+		if err != nil {
+			return err
+		}
+
+		err = fileInArchive.Close()
+
+		if err != nil {
+			return err
+		}
+
+		err = os.Chtimes(fpath, f.Modified, f.Modified)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	return nil
 }

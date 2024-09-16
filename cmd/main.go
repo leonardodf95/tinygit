@@ -43,7 +43,7 @@ func Status() *cobra.Command {
 		Use:   "status",
 		Short: "Mostra o status de alterações do diretório monitorado pelo controle de versão",
 		Run: func(cmd *cobra.Command, args []string) {
-			_, err := tinygit.StatusControlVersion(path)
+			_, _, err := tinygit.StatusControlVersion(path)
 			if err != nil {
 				fmt.Println("Erro ao verificar status:", err)
 			}
