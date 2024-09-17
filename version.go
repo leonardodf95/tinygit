@@ -12,7 +12,7 @@ import (
 )
 
 // Constrói recursivamente a árvore
-func buildTree(rootPath, path string, ext *[]string) (*Node, error) {
+func buildTree(rootPath, path string, ext, ignore *[]string) (*Node, error) {
 	// Calcula o caminho relativo em relação ao diretório base
 	relativePath, err := filepath.Rel(rootPath, path)
 	if err != nil {
@@ -30,7 +30,7 @@ func buildTree(rootPath, path string, ext *[]string) (*Node, error) {
 
 	if fileInfo.IsDir() {
 		node.Type = treeType
-		children, err := readDir(rootPath, path, ext)
+		children, err := readDir(rootPath, path, ext, ignore)
 		if err != nil {
 			return nil, err
 		}
@@ -89,10 +89,9 @@ func calculateFileHash(filePath string) (string, error) {
 func CompareTrees(savedNode, currentNode *Node) *Changes {
 	changes := &Changes{}
 
-	if savedNode == nil && currentNode == nil {
+	if (savedNode == nil || savedNode.Hash == "") && currentNode == nil {
 		return changes
 	}
-
 	if savedNode == nil {
 		changes.Added = append(changes.Added, currentNode)
 		return changes
@@ -161,4 +160,22 @@ func printTree(node *Node) {
 	for _, child := range node.Children {
 		printTree(child)
 	}
+}
+
+// Compara duas slices de strings e retorna os elementos diferentes que estão no slice2
+func CompareSlices(slice1, slice2 []string) []string {
+	diff := []string{}
+	for _, s2 := range slice2 {
+		found := false
+		for _, s1 := range slice1 {
+			if strings.EqualFold(s1, s2) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			diff = append(diff, s2)
+		}
+	}
+	return diff
 }

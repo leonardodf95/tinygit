@@ -10,6 +10,7 @@ import (
 var (
 	path               string
 	acceptedExtensions = []string{".exe", ".map", ".fr3", ".dll", ".xsd", ".wav", ".jpg"}
+	ignoredFiles       = []string{}
 )
 
 func main() {
@@ -25,7 +26,7 @@ func Init() *cobra.Command {
 		Use:   "init",
 		Short: "Inicializa o controle de versão",
 		Run: func(cmd *cobra.Command, args []string) {
-			err := tinygit.InitControlVersion(path, acceptedExtensions)
+			err := tinygit.InitControlVersion(path, acceptedExtensions, ignoredFiles)
 			if err != nil {
 				fmt.Println("Erro ao inicializar controle de versão:", err)
 			}
@@ -34,6 +35,7 @@ func Init() *cobra.Command {
 
 	cmd.Flags().StringVarP(&path, "directory", "d", "", "Diretório de trabalho")
 	cmd.Flags().StringSliceVarP(&acceptedExtensions, "extensions", "e", acceptedExtensions, "Extensões de arquivos a serem monitoradas")
+	cmd.Flags().StringSliceVarP(&ignoredFiles, "ignore", "i", ignoredFiles, "Arquivos a serem ignorados")
 
 	return cmd
 }
@@ -43,7 +45,7 @@ func Status() *cobra.Command {
 		Use:   "status",
 		Short: "Mostra o status de alterações do diretório monitorado pelo controle de versão",
 		Run: func(cmd *cobra.Command, args []string) {
-			_, _, err := tinygit.StatusControlVersion(path)
+			_, _, err := tinygit.StatusControlVersion(path, acceptedExtensions, ignoredFiles)
 			if err != nil {
 				fmt.Println("Erro ao verificar status:", err)
 			}
@@ -51,6 +53,8 @@ func Status() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&path, "directory", "d", "", "Diretório de trabalho")
+	cmd.Flags().StringSliceVarP(&acceptedExtensions, "extensions", "e", acceptedExtensions, "Extensões de arquivos a serem monitoradas")
+	cmd.Flags().StringSliceVarP(&ignoredFiles, "ignore", "i", ignoredFiles, "Arquivos a serem ignorados")
 
 	return cmd
 }
@@ -60,7 +64,7 @@ func Commit() *cobra.Command {
 		Use:   "commit",
 		Short: "Salva as mudanças no controle de versão",
 		Run: func(cmd *cobra.Command, args []string) {
-			err := tinygit.CommitControlVersion(path)
+			err := tinygit.CommitControlVersion(path, acceptedExtensions, ignoredFiles)
 			if err != nil {
 				fmt.Println("Erro ao realizar commit:", err)
 			}
@@ -68,6 +72,8 @@ func Commit() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&path, "directory", "d", "", "Diretório de trabalho")
+	cmd.Flags().StringSliceVarP(&acceptedExtensions, "extensions", "e", acceptedExtensions, "Extensões de arquivos a serem monitoradas")
+	cmd.Flags().StringSliceVarP(&ignoredFiles, "ignore", "i", ignoredFiles, "Arquivos a serem ignorados")
 
 	return cmd
 }

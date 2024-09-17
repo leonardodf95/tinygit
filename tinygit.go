@@ -8,6 +8,7 @@ import (
 // Structure to represent the versioning file
 type Versioning struct {
 	ExtensionsToGenerateVersion []string
+	ignoredFiles                []string
 	Head                        string
 	Tree                        Node
 }
@@ -34,7 +35,8 @@ const (
 	treeType        = "tree"
 )
 
-func InitControlVersion(path string, ext []string) error {
+// Function to initialize the version control in the directory
+func InitControlVersion(path string, extPermited, ignoredFiles []string) error {
 	if VerifyIfExistVersionControl(path) {
 		fmt.Println("Controle de versão já inicializado.")
 		return nil
@@ -44,19 +46,23 @@ func InitControlVersion(path string, ext []string) error {
 		fmt.Println("Erro ao criar diretório de versão:", err)
 		return err
 	}
+
 	fmt.Println("Controle de versão inicializado em", path)
-	tree, err := buildTree(path, path, &ext)
+	tree, err := buildTree(path, path, &extPermited, &ignoredFiles)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return err
 	}
 	if tree == nil {
 		fmt.Println("A árvore está vazia.")
-		return nil
+		tree = &Node{
+			Hash: "",
+		}
 	}
 
 	v := Versioning{
-		ExtensionsToGenerateVersion: ext,
+		ExtensionsToGenerateVersion: extPermited,
+		ignoredFiles:                ignoredFiles,
 		Head:                        tree.Hash,
 		Tree:                        *tree,
 	}
@@ -69,13 +75,21 @@ func InitControlVersion(path string, ext []string) error {
 	return nil
 }
 
-func CommitControlVersion(path string) error {
-	c, v, err := StatusControlVersion(path)
+func CommitControlVersion(path string, ext, ignore []string) error {
+	if ignore == nil {
+		ignore = []string{}
+	}
+
+	c, v, err := StatusControlVersion(path, ext, ignore)
 	if err != nil {
 		fmt.Println("Erro ao verificar o status:", err)
 		return err
 	}
+
 	if c == nil {
+		return nil
+	}
+	if len(c.Modified) == 0 && len(c.Added) == 0 && len(c.Removed) == 0 {
 		return nil
 	}
 
@@ -91,11 +105,10 @@ func CommitControlVersion(path string) error {
 	return nil
 }
 
-func StatusControlVersion(path string) (*Changes, *Versioning, error) {
+func StatusControlVersion(path string, ext, ignore []string) (*Changes, *Versioning, error) {
 	fmt.Println("Verificando status de controle de versão em", path)
 	if !VerifyIfExistVersionControl(path) {
-		fmt.Println("Controle de versão não inicializado.")
-		return nil, nil, nil
+		return nil, nil, fmt.Errorf("controle de versão não inicializado")
 	}
 
 	v, err := decompressVersionFile(path)
@@ -104,7 +117,21 @@ func StatusControlVersion(path string) (*Changes, *Versioning, error) {
 		return nil, nil, err
 	}
 
-	currentTree, err := buildTree(path, path, &v.ExtensionsToGenerateVersion)
+	if ignore != nil {
+		diff := CompareSlices(v.ignoredFiles, ignore)
+		if len(diff) > 0 {
+			v.ignoredFiles = append(v.ignoredFiles, diff...)
+		}
+	}
+
+	if ext != nil {
+		diff := CompareSlices(v.ExtensionsToGenerateVersion, ext)
+		if len(diff) > 0 {
+			v.ExtensionsToGenerateVersion = append(v.ExtensionsToGenerateVersion, diff...)
+		}
+	}
+
+	currentTree, err := buildTree(path, path, &v.ExtensionsToGenerateVersion, &v.ignoredFiles)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return nil, nil, err
@@ -213,7 +240,7 @@ func CloneRepository(path string, server string, params map[string]string) error
 	}
 
 	fmt.Println("Repositório clonado, gerando árvore de versionamento...")
-	tree, err := buildTree(path, path, &v.ExtensionsToGenerateVersion)
+	tree, err := buildTree(path, path, &v.ExtensionsToGenerateVersion, &v.ignoredFiles)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return err
@@ -265,7 +292,7 @@ func PullRepository(path string, server string, parameter map[string]string) err
 	}
 
 	fmt.Println("Árvore de versionamento atualizada, gerando árvore local...")
-	tree, err := buildTree(path, path, &vCurrent.ExtensionsToGenerateVersion)
+	tree, err := buildTree(path, path, &vCurrent.ExtensionsToGenerateVersion, &vCurrent.ignoredFiles)
 	if err != nil {
 		fmt.Println("Erro ao construir a árvore:", err)
 		return fmt.Errorf("erro ao construir a árvore: %w", err)

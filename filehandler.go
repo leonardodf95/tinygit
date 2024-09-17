@@ -106,7 +106,7 @@ func contains(slice []string, element string) bool {
 }
 
 // Lê um diretório e retorna os nós filhos
-func readDir(rootPath, dirPath string, ext *[]string) ([]*Node, error) {
+func readDir(rootPath, dirPath string, ext, ignore *[]string) ([]*Node, error) {
 	dirEntries, err := os.ReadDir(dirPath)
 	if err != nil {
 		return nil, err
@@ -114,11 +114,11 @@ func readDir(rootPath, dirPath string, ext *[]string) ([]*Node, error) {
 
 	var children []*Node
 	for _, entry := range dirEntries {
-		if !entry.IsDir() && !contains(*ext, filepath.Ext(entry.Name())) || entry.Name() == versionDirName {
+		if !entry.IsDir() && !contains(*ext, filepath.Ext(entry.Name())) || entry.Name() == versionDirName || contains(*ignore, entry.Name()) {
 			continue
 		}
 		childPath := filepath.Join(dirPath, entry.Name())
-		childNode, err := buildTree(rootPath, childPath, ext)
+		childNode, err := buildTree(rootPath, childPath, ext, ignore)
 		if err != nil {
 			return nil, err
 		}
